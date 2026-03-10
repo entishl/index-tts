@@ -436,12 +436,22 @@ class UnifiedVoice(nn.Module):
 
             # Create accel model
             accel_gpt = GPT2AccelModel(gpt_config)
-            accel_gpt.load_state_dict(self.gpt.state_dict(), strict=False)
+            
+            # Tie weights from self.gpt to accel_gpt to avoid massive VRAM duplication
+            for name, param in self.gpt.named_parameters():
+                attrs = name.split('.')
+                module = accel_gpt
+                for attr in attrs[:-1]:
+                    module = getattr(module, attr)
+                delattr(module, attrs[-1])
+                module.register_parameter(attrs[-1], param)
 
             if half:
-                accel_gpt = accel_gpt.half().cuda()
+                # Need to convert self.gpt to half if it's not already
+                # accel_gpt shares parameters, so it will also become half
+                self.gpt = self.gpt.half().cuda()
             else:
-                accel_gpt = accel_gpt.cuda()
+                self.gpt = self.gpt.cuda()
             accel_gpt.eval()
 
             lm_head_with_norm = nn.Sequential(self.final_norm, self.mel_head)
