@@ -389,6 +389,33 @@ tts.infer(spk_audio_prompt='examples/voice_12.wav', text=text, output_path="gen.
 > 之前你做DE5很好，所以这一次也DEI3做DE2很好才XING2，如果这次目标完成得不错的话，我们就直接打DI1去银行取钱。
 > ```
 
+#### 🚀 API Server (OpenAI Compatible)
+
+We provide a specialized FastAPI server that implements an OpenAI-compatible `/v1/audio/speech` endpoint. This allows you to easily plug IndexTTS2 into any existing application that supports OpenAI TTS!
+
+**1. Start the API Server:**
+
+```bash
+uv run api.py --port 8000
+```
+*(The server supports all the same arguments as `webui.py`, such as `--fp16`, `--deepspeed`, etc.)*
+
+**2. Send an API Request:**
+
+Place your reference audio (e.g., `my_voice.wav`) into the `prompts/` (or `examples/`) directory, then you can make standard OpenAI-formatted requests:
+
+```bash
+curl http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "indextts-v2",
+    "input": "This is a test of the OpenAI compatible API.",
+    "voice": "my_voice.wav",
+    "response_format": "wav"
+  }' \
+  --output speech.wav
+```
+
 ### Legacy: IndexTTS1 User Guide
 
 You can also use our previous IndexTTS1 model by importing a different module:
