@@ -29,3 +29,11 @@ desktop.ini
 /checkpoints/*
 !/checkpoints/*.yaml
 /outputs/
+indextts/s2mel/modules/bigvgan/alias_free_activation/cuda/build/build.ninja
+indextts/s2mel/modules/bigvgan/alias_free_activation/cuda/build/anti_alias_activation.o
+indextts/s2mel/modules/bigvgan/alias_free_activation/cuda/build/.ninja_log
+indextts/s2mel/modules/bigvgan/alias_free_activation/cuda/build/anti_alias_activation_cuda.so
+indextts/s2mel/modules/bigvgan/alias_free_activation/cuda/build/anti_alias_activation_cuda.cuda.o
+indextts/s2mel/modules/bigvgan/alias_free_activation/cuda/build/.ninja_deps
+start.sh
+cuda-keyring_1.1-1_all.deb

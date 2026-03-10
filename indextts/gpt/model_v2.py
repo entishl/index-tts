@@ -452,7 +452,7 @@ class UnifiedVoice(nn.Module):
                 num_heads=self.heads,
                 head_dim=self.model_dim // self.heads,
                 block_size=256,
-                num_blocks=16,  # Reduce to save memory (16*256 = 4096 tokens capacity)
+                num_blocks=8,  # Reduce to save memory (16*256 = 4096 tokens capacity)
                 use_cuda_graph=True,
             )
             print("acceleration engine initialized")
