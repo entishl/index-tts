@@ -37,3 +37,4 @@ indextts/s2mel/modules/bigvgan/alias_free_activation/cuda/build/anti_alias_activ
 indextts/s2mel/modules/bigvgan/alias_free_activation/cuda/build/.ninja_deps
 start.sh
 cuda-keyring_1.1-1_all.deb
+prompts/
