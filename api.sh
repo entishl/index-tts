@@ -9,7 +9,7 @@ export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 cd "$(dirname "$0")"
 
 echo "----------------------------------------------------------------"
-echo "🚀 正在启动 IndexTTS2 API 服务 (已开启 RTX 4070 硬件加速)"
+echo "🚀 正在启动 IndexTTS2 API 服务 "
 echo "💡 模式: FP16 + Flash Attention 2 + CUDA Kernel"
 echo "----------------------------------------------------------------"
 
