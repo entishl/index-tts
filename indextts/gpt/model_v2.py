@@ -1,4 +1,5 @@
 import functools
+import gc
 
 import torch
 import torch.nn as nn
@@ -434,24 +435,43 @@ class UnifiedVoice(nn.Module):
 
             from indextts.accel import GPT2AccelModel, AccelInferenceEngine
 
-            # Create accel model
-            accel_gpt = GPT2AccelModel(gpt_config)
-            
-            # Tie weights from self.gpt to accel_gpt to avoid massive VRAM duplication
+            # Create accel model on meta device to avoid allocating any real CPU memory
+            with torch.device('meta'):
+                accel_gpt = GPT2AccelModel(gpt_config)
+
+            # Tie weights: replace meta-device placeholders with real parameters from self.gpt
+            tied_params = set()
             for name, param in self.gpt.named_parameters():
                 attrs = name.split('.')
                 module = accel_gpt
-                for attr in attrs[:-1]:
-                    module = getattr(module, attr)
-                delattr(module, attrs[-1])
-                module.register_parameter(attrs[-1], param)
+                try:
+                    for attr in attrs[:-1]:
+                        module = getattr(module, attr)
+                    delattr(module, attrs[-1])
+                    module.register_parameter(attrs[-1], param)
+                    tied_params.add(name)
+                except AttributeError:
+                    pass  # Skip parameters that don't exist in accel model
 
-            if half:
-                # Need to convert self.gpt to half if it's not already
-                # accel_gpt shares parameters, so it will also become half
-                self.gpt = self.gpt.half().cuda()
-            else:
-                self.gpt = self.gpt.cuda()
+            # Delete untied embedding layers that accel model inherited from GPT2Model
+            # (wpe and wte were deleted in build_hf_gpt_transformer for self.gpt)
+            if hasattr(accel_gpt, 'wpe') and isinstance(accel_gpt.wpe, nn.Module):
+                del accel_gpt.wpe
+                accel_gpt.wpe = functools.partial(null_position_embeddings, dim=self.model_dim)
+            if hasattr(accel_gpt, 'wte') and isinstance(accel_gpt.wte, nn.Module):
+                del accel_gpt.wte
+
+            # Also replace meta-device buffers (e.g. attention bias) with real ones
+            for name, buf in list(accel_gpt.named_buffers()):
+                if buf.device.type == 'meta':
+                    attrs = name.split('.')
+                    module = accel_gpt
+                    for attr in attrs[:-1]:
+                        module = getattr(module, attr)
+                    # Recreate buffer with correct shape on the target device
+                    real_buf = torch.zeros(buf.shape, dtype=buf.dtype, device=next(self.parameters()).device)
+                    module.register_buffer(attrs[-1], real_buf, persistent=False)
+
             accel_gpt.eval()
 
             lm_head_with_norm = nn.Sequential(self.final_norm, self.mel_head)
@@ -462,10 +482,11 @@ class UnifiedVoice(nn.Module):
                 num_heads=self.heads,
                 head_dim=self.model_dim // self.heads,
                 block_size=256,
-                num_blocks=8,  # Reduce to save memory (16*256 = 4096 tokens capacity)
+                num_blocks=8,  # Reduce to save memory (8*256 = 2048 tokens capacity)
                 use_cuda_graph=True,
             )
             print("acceleration engine initialized")
+
         self.inference_model = GPT2InferenceModel(
             gpt_config,
             self.gpt,
@@ -494,6 +515,9 @@ class UnifiedVoice(nn.Module):
 
         # self.inference_model = PrunedGPT2InferenceModel(gpt_config, self.gpt, self.mel_pos_embedding, self.mel_embedding, self.final_norm, self.mel_head)
         self.gpt.wte = self.mel_embedding
+
+        # Force garbage collection to reclaim any lingering CPU memory
+        gc.collect()
 
     def build_aligned_inputs_and_targets(self, input, start_token, stop_token):
         inp = F.pad(input, (1, 0), value=start_token)

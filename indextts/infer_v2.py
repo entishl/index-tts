@@ -1,3 +1,4 @@
+import gc
 import os
 from subprocess import CalledProcessError
 
@@ -91,6 +92,7 @@ class IndexTTS2:
         else:
             self.gpt.eval()
         print(">> GPT weights restored from:", self.gpt_path)
+        gc.collect()
 
         if use_deepspeed:
             try:
@@ -100,6 +102,9 @@ class IndexTTS2:
                 print(f">> Failed to load DeepSpeed. Falling back to normal inference. Error: {e}")
 
         self.gpt.post_init_gpt2_config(use_deepspeed=use_deepspeed, kv_cache=True, half=self.use_fp16)
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         if self.use_cuda_kernel:
             # preload the CUDA kernel for BigVGAN
@@ -119,6 +124,7 @@ class IndexTTS2:
         self.semantic_model.eval()
         self.semantic_mean = self.semantic_mean.to(self.device)
         self.semantic_std = self.semantic_std.to(self.device)
+        gc.collect()
 
         semantic_codec = build_semantic_codec(self.cfg.semantic_codec)
         semantic_code_ckpt = hf_hub_download("amphion/MaskGCT", filename="semantic_codec/model.safetensors", cache_dir=os.path.join(self.model_dir, "hf_cache"))
@@ -126,6 +132,7 @@ class IndexTTS2:
         self.semantic_codec = semantic_codec.to(self.device)
         self.semantic_codec.eval()
         print('>> semantic_codec weights restored from: {}'.format(semantic_code_ckpt))
+        gc.collect()
 
         s2mel_path = os.path.join(self.model_dir, self.cfg.s2mel_checkpoint)
         s2mel = MyModel(self.cfg.s2mel, use_gpt_latent=True)
@@ -148,6 +155,7 @@ class IndexTTS2:
         
         self.s2mel.eval()
         print(">> s2mel weights restored from:", s2mel_path)
+        gc.collect()
 
         # load campplus_model
         campplus_ckpt_path = hf_hub_download(
@@ -165,6 +173,7 @@ class IndexTTS2:
         self.bigvgan.remove_weight_norm()
         self.bigvgan.eval()
         print(">> bigvgan weights restored from:", bigvgan_name)
+        gc.collect()
 
         self.bpe_path = os.path.join(self.model_dir, self.cfg.dataset["bpe_model"])
         self.normalizer = TextNormalizer(enable_glossary=True)
