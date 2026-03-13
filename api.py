@@ -1,12 +1,14 @@
 import os
 import sys
 import time
+import uuid
 import argparse
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 import uvicorn
 import subprocess
 
@@ -47,7 +49,7 @@ class SpeechRequest(BaseModel):
         default="sample_prompt.wav", 
         description="The reference audio filename located in the 'prompts/' or 'examples/' directory."
     )
-    response_format: Optional[str] = Field(default="wav", description="The format to return the audio in. Default is wav.")
+    response_format: Optional[str] = Field(default="mp3", description="The format to return the audio in. Default is mp3.")
     speed: Optional[float] = Field(default=1.0, description="Speed of the generated audio.")
     
     # Custom IndexTTS params
@@ -69,7 +71,7 @@ class SpeechRequest(BaseModel):
     max_mel_tokens: Optional[int] = Field(default=1500)
 
 @app.post("/v1/audio/speech")
-async def create_speech(req: SpeechRequest, background_tasks: BackgroundTasks):
+async def create_speech(req: SpeechRequest):
     global tts
     if tts is None:
         raise HTTPException(status_code=500, detail="TTS Model is not initialized.")
@@ -94,10 +96,12 @@ async def create_speech(req: SpeechRequest, background_tasks: BackgroundTasks):
 
     output_dir = os.path.join(current_dir, "outputs", "api")
     os.makedirs(output_dir, exist_ok=True)
-    out_filename_base = f"speech_{int(time.time()*1000)}"
+    
+    out_filename_base = f"speech_{uuid.uuid4().hex}"
     out_path_wav = os.path.join(output_dir, f"{out_filename_base}.wav")
     
     req_format = req.response_format.lower() if req.response_format else "mp3"
+    req_format = req_format.lstrip('.') # 防止用户手滑传入 ".mp3"
     final_out_path = out_path_wav
     
     vec = req.emo_vector
@@ -143,16 +147,32 @@ async def create_speech(req: SpeechRequest, background_tasks: BackgroundTasks):
                 "-vn", "-ar", "24000", "-b:a", "128k",
                 final_out_path
             ]
-            subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # 捕获 ffmpeg 输出，以防没有安装 ffmpeg 导致报错被静默吞掉
+            result = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode != 0:
+                raise RuntimeError(f"FFmpeg conversion failed: {result.stderr.decode('utf-8', errors='ignore')}")
+            
             if os.path.exists(out_path_wav):
                 os.remove(out_path_wav)
 
     except Exception as e:
+        # 异常保护：如果中间出错（比如 ffmpeg 失败），确保清理掉残留的 .wav 文件
+        if os.path.exists(out_path_wav):
+            try:
+                os.remove(out_path_wav)
+            except:
+                pass
         raise HTTPException(status_code=500, detail=str(e))
         
-    background_tasks.add_task(cleanup_old_files, output_dir, 24)
+    cleanup_task = BackgroundTask(cleanup_old_files, output_dir, 24)
     media_type = "audio/mpeg" if req_format == "mp3" else f"audio/{req_format}"
-    return FileResponse(final_out_path, media_type=media_type, filename=f"speech.{req_format}")
+    
+    return FileResponse(
+        final_out_path, 
+        media_type=media_type, 
+        filename=f"speech.{req_format}", 
+        background=cleanup_task # 直接传递给 FileResponse
+    )
 
 def main():
     parser = argparse.ArgumentParser(
