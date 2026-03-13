@@ -4,10 +4,11 @@ import time
 import argparse
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 import uvicorn
+import subprocess
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -21,6 +22,23 @@ from indextts.infer_v2 import IndexTTS2
 
 app = FastAPI(title="IndexTTS OpenAI-Compatible API")
 tts = None
+
+def cleanup_old_files(directory: str, max_age_hours: int = 24):
+    """清理目录中超过指定小时数的文件"""
+    if not os.path.exists(directory):
+        return
+    now = time.time()
+    max_age_seconds = max_age_hours * 3600
+    for filename in os.listdir(directory):
+        file_path = os.path.join(directory, filename)
+        if os.path.isfile(file_path):
+            file_mtime = os.path.getmtime(file_path)
+            if now - file_mtime > max_age_seconds:
+                try:
+                    os.remove(file_path)
+                    print(f"Cleaned up old file: {file_path}")
+                except Exception as e:
+                    print(f"Failed to clean up {file_path}: {e}")
 
 class SpeechRequest(BaseModel):
     model: str = Field(default="indextts-v2", description="The tts model to use.")
@@ -51,7 +69,7 @@ class SpeechRequest(BaseModel):
     max_mel_tokens: Optional[int] = Field(default=1500)
 
 @app.post("/v1/audio/speech")
-async def create_speech(req: SpeechRequest):
+async def create_speech(req: SpeechRequest, background_tasks: BackgroundTasks):
     global tts
     if tts is None:
         raise HTTPException(status_code=500, detail="TTS Model is not initialized.")
@@ -76,8 +94,11 @@ async def create_speech(req: SpeechRequest):
 
     output_dir = os.path.join(current_dir, "outputs", "api")
     os.makedirs(output_dir, exist_ok=True)
-    out_filename = f"speech_{int(time.time()*1000)}.wav" 
-    out_path = os.path.join(output_dir, out_filename)
+    out_filename_base = f"speech_{int(time.time()*1000)}"
+    out_path_wav = os.path.join(output_dir, f"{out_filename_base}.wav")
+    
+    req_format = req.response_format.lower() if req.response_format else "mp3"
+    final_out_path = out_path_wav
     
     vec = req.emo_vector
     if req.emo_control_method == 2 and vec:
@@ -104,7 +125,7 @@ async def create_speech(req: SpeechRequest):
         tts.infer(
             spk_audio_prompt=prompt_path,
             text=req.input,
-            output_path=out_path,
+            output_path=out_path_wav,
             emo_audio_prompt=emo_ref_mapped,
             emo_alpha=req.emo_weight,
             emo_vector=vec,
@@ -114,10 +135,24 @@ async def create_speech(req: SpeechRequest):
             max_text_tokens_per_segment=req.max_text_tokens_per_segment,
             **kwargs
         )
+
+        if req_format != "wav":
+            final_out_path = os.path.join(output_dir, f"{out_filename_base}.{req_format}")
+            ffmpeg_cmd = [
+                "ffmpeg", "-y", "-i", out_path_wav,
+                "-vn", "-ar", "24000", "-b:a", "128k",
+                final_out_path
+            ]
+            subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if os.path.exists(out_path_wav):
+                os.remove(out_path_wav)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
         
-    return FileResponse(out_path, media_type="audio/wav", filename="speech.wav")
+    background_tasks.add_task(cleanup_old_files, output_dir, 24)
+    media_type = "audio/mpeg" if req_format == "mp3" else f"audio/{req_format}"
+    return FileResponse(final_out_path, media_type=media_type, filename=f"speech.{req_format}")
 
 def main():
     parser = argparse.ArgumentParser(
