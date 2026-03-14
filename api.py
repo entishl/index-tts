@@ -3,7 +3,7 @@ import sys
 import time
 import uuid
 import argparse
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -24,6 +24,21 @@ from indextts.infer_v2 import IndexTTS2
 
 app = FastAPI(title="IndexTTS OpenAI-Compatible API")
 tts = None
+VIRTUAL_VOICE_CONFIG = os.path.join(current_dir, "visual_voice.json")
+
+def load_virtual_voices() -> Dict[str, Any]:
+    if not os.path.exists(VIRTUAL_VOICE_CONFIG):
+        return {}
+    try:
+        import json
+        with open(VIRTUAL_VOICE_CONFIG, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        voices = data.get("virtual_voices", {})
+        return voices if isinstance(voices, dict) else {}
+    except Exception:
+        return {}
 
 def cleanup_old_files(directory: str, max_age_hours: int = 24):
     """清理目录中超过指定小时数的文件"""
@@ -78,16 +93,34 @@ async def create_speech(req: SpeechRequest):
     if not req.input.strip():
         raise HTTPException(status_code=400, detail="Input text cannot be empty.")
         
-    # locate reference voice
+    # locate reference voice (real files first)
     prompt_path = os.path.join(current_dir, "prompts", req.voice)
     if not os.path.exists(prompt_path):
         prompt_path = os.path.join(current_dir, "examples", req.voice)
         if not os.path.exists(prompt_path):
+            prompt_path = None
+
+    # virtual voice fallback
+    virtual_voice = None
+    if prompt_path is None:
+        virtual_voices = load_virtual_voices()
+        virtual_voice = virtual_voices.get(req.voice)
+        if virtual_voice is None:
             raise HTTPException(status_code=404, detail=f"Reference audio '{req.voice}' not found in 'prompts/' or 'examples/' directory.")
+
+        base_name = virtual_voice.get("base")
+        if not isinstance(base_name, str) or not base_name:
+            raise HTTPException(status_code=400, detail=f"Virtual voice '{req.voice}' missing 'base'.")
+
+        prompt_path = os.path.join(current_dir, "prompts", base_name)
+        if not os.path.exists(prompt_path):
+            prompt_path = os.path.join(current_dir, "examples", base_name)
+            if not os.path.exists(prompt_path):
+                raise HTTPException(status_code=404, detail=f"Base reference audio '{base_name}' for virtual voice '{req.voice}' not found in 'prompts/' or 'examples/' directory.")
             
-    # locate optional emotion reference voice
+    # locate optional emotion reference voice (ignored for virtual voices)
     emo_ref_mapped = None
-    if req.emo_control_method == 1 and req.emo_ref_path:
+    if virtual_voice is None and req.emo_control_method == 1 and req.emo_ref_path:
         emo_ref_mapped = os.path.join(current_dir, "prompts", req.emo_ref_path)
         if not os.path.exists(emo_ref_mapped):
             emo_ref_mapped = os.path.join(current_dir, "examples", req.emo_ref_path)
@@ -105,14 +138,31 @@ async def create_speech(req: SpeechRequest):
     final_out_path = out_path_wav
     
     vec = req.emo_vector
-    if req.emo_control_method == 2 and vec:
-        if len(vec) != 8:
-            raise HTTPException(status_code=400, detail="emo_vector must have exactly 8 elements.")
-        vec = tts.normalize_emo_vec(vec, apply_bias=True)
-    else:
-        vec = None
-
+    use_emo_text = (req.emo_control_method == 3)
     emo_text = req.emo_text if req.emo_text != "" else None
+    emo_weight = req.emo_weight
+    emo_random = req.emo_random
+
+    if virtual_voice is not None:
+        vec = virtual_voice.get("emo_vector")
+        if not isinstance(vec, list) or len(vec) != 8:
+            raise HTTPException(status_code=400, detail=f"Virtual voice '{req.voice}' must define 8-dim emo_vector.")
+        vec = tts.normalize_emo_vec(vec, apply_bias=True)
+        use_emo_text = False
+        emo_text = None
+        emo_ref_mapped = None
+        emo_weight = float(virtual_voice.get("emo_weight", 0.65))
+        emo_random = False
+    else:
+        if req.emo_control_method == 2 and vec:
+            if len(vec) != 8:
+                raise HTTPException(status_code=400, detail="emo_vector must have exactly 8 elements.")
+            vec = tts.normalize_emo_vec(vec, apply_bias=True)
+        else:
+            vec = None
+
+    if virtual_voice is None:
+        emo_text = req.emo_text if req.emo_text != "" else None
 
     kwargs = {
         "do_sample": req.do_sample,
@@ -131,11 +181,11 @@ async def create_speech(req: SpeechRequest):
             text=req.input,
             output_path=out_path_wav,
             emo_audio_prompt=emo_ref_mapped,
-            emo_alpha=req.emo_weight,
+            emo_alpha=emo_weight,
             emo_vector=vec,
-            use_emo_text=(req.emo_control_method == 3),
+            use_emo_text=use_emo_text,
             emo_text=emo_text,
-            use_random=req.emo_random,
+            use_random=emo_random,
             max_text_tokens_per_segment=req.max_text_tokens_per_segment,
             **kwargs
         )

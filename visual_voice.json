@@ -1,0 +1,20 @@
+  {
+    "comment": "virtual_voices: key is the exposed voice name. base: reference audio filename in prompts/ or examples/. emo_vector is 8-dim emotion control; order is [喜/Happy, 怒/Angry, 哀/Sad, 惧/Afraid, 厌恶/Disgusted, 低落/Melancholic, 惊喜/Surprised, 平静/Calm]. emo_weight is optional.",
+    "emo_vector_order": [
+      {"zh": "喜", "en": "Happy"},
+      {"zh": "怒", "en": "Angry"},
+      {"zh": "哀", "en": "Sad"},
+      {"zh": "惧", "en": "Afraid"},
+      {"zh": "厌恶", "en": "Disgusted"},
+      {"zh": "低落", "en": "Melancholic"},
+      {"zh": "惊喜", "en": "Surprised"},
+      {"zh": "平静", "en": "Calm"}
+    ],
+    "virtual_voices": {
+      "yyds": {
+        "base": "yuki.wav",
+        "emo_vector": [0.5, 0.1, 0.0, 0.0, 0.1, 0.0, 0.1, 0.1],
+        "emo_weight": 0.65
+      }
+    }
+  }
