@@ -15,4 +15,4 @@ echo "----------------------------------------------------------------"
 
 # 使用 uv 运行 api 服务，默认开启所有加速参数
 # "$@" 允许您在运行脚本时传递额外参数，例如: ./api.sh --port 8080
-uv run api.py --fp16 --accel --cuda_kernel "$@"
+uv run api.py --fp16 --accel --cuda_kernel --disable_emo_text --deepspeed "$@"

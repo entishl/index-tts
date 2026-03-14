@@ -186,6 +186,7 @@ def main():
     parser.add_argument("--deepspeed", action="store_true", default=False, help="Use DeepSpeed to accelerate if available")
     parser.add_argument("--cuda_kernel", action="store_true", default=False, help="Use CUDA kernel for inference if available")
     parser.add_argument("--accel", action="store_true", default=False, help="Use Accel engine (Flash Attention 2) if available")
+    parser.add_argument("--disable_emo_text", action="store_true", default=False, help="Disable text-based emotion control model (QwenEmotion)")
     args = parser.parse_args()
 
     if not os.path.exists(args.model_dir):
@@ -208,6 +209,7 @@ def main():
         use_deepspeed=args.deepspeed,
         use_cuda_kernel=args.cuda_kernel,
         use_accel=args.accel,
+        use_emo_text_model=not args.disable_emo_text,
     )
     
     print(f"Starting API server on http://{args.host}:{args.port}")

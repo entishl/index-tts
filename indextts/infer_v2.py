@@ -39,7 +39,8 @@ import torch.nn.functional as F
 class IndexTTS2:
     def __init__(
             self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_fp16=False, device=None,
-            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False
+            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False,
+            use_emo_text_model=True
     ):
         """
         Args:
@@ -51,6 +52,7 @@ class IndexTTS2:
             use_deepspeed (bool): whether to use DeepSpeed or not.
             use_accel (bool): whether to use acceleration engine for GPT2 or not.
             use_torch_compile (bool): whether to use torch.compile for optimization or not.
+            use_emo_text_model (bool): whether to enable QwenEmotion model for text-based emotion control.
         """
         if device is not None:
             self.device = device
@@ -81,7 +83,9 @@ class IndexTTS2:
         self.use_accel = use_accel
         self.use_torch_compile = use_torch_compile
 
-        self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path))
+        self.qwen_emo = None
+        if use_emo_text_model:
+            self.qwen_emo = QwenEmotion(os.path.join(self.model_dir, self.cfg.qwen_emo_path))
 
         self.gpt = UnifiedVoice(**self.cfg.gpt, use_accel=self.use_accel)
         self.gpt_path = os.path.join(self.model_dir, self.cfg.gpt_checkpoint)
@@ -409,12 +413,16 @@ class IndexTTS2:
 
         if use_emo_text:
             # automatically generate emotion vectors from text prompt
-            if emo_text is None:
-                emo_text = text  # use main text prompt
-            emo_dict = self.qwen_emo.inference(emo_text)
-            print(f"detected emotion vectors from text: {emo_dict}")
-            # convert ordered dict to list of vectors; the order is VERY important!
-            emo_vector = list(emo_dict.values())
+            if self.qwen_emo is None:
+                print(">> QwenEmotion disabled; ignoring text-based emotion control.")
+                use_emo_text = False
+            else:
+                if emo_text is None:
+                    emo_text = text  # use main text prompt
+                emo_dict = self.qwen_emo.inference(emo_text)
+                print(f"detected emotion vectors from text: {emo_dict}")
+                # convert ordered dict to list of vectors; the order is VERY important!
+                emo_vector = list(emo_dict.values())
 
         if emo_vector is not None:
             # we have emotion vectors; they can't be blended via alpha mixing
