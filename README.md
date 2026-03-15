@@ -54,7 +54,7 @@ uv sync --all-extras
 - `--deepspeed` 启用 DeepSpeed 推理 (显著提升吞吐)。
 - `--accel` 启用 **Flash Attention 2** 硬件加速。
 - `--cuda_kernel` 启用自定义 CUDA 算子优化。
-- `--disable_emo_text` 禁用情感分析模型 (降低开销，推荐在 API 模式下配合 `visual_voice.json` 使用)。
+- `--disable_emo_text` 禁用文本情感分析模型 (降低开销，推荐在 API 模式下配合 `visual_voice.json` 使用)。
 
 ---
 
