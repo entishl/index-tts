@@ -3,6 +3,7 @@ import sys
 import time
 import uuid
 import argparse
+import re
 from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, HTTPException
@@ -26,6 +27,12 @@ app = FastAPI(title="IndexTTS OpenAI-Compatible API")
 tts = None
 VIRTUAL_VOICE_CONFIG = os.path.join(current_dir, "visual_voice.json")
 
+_TAG_CLEAN_RE = re.compile(r"\[\[.*?\]\]|\[.*?\]|<.*?>")
+
+def _sanitize_input_text(text: str) -> str:
+    # Remove tags wrapped by [] or <> (e.g., <q>, [[tts]])
+    return _TAG_CLEAN_RE.sub("", text)
+
 def load_virtual_voices() -> Dict[str, Any]:
     if not os.path.exists(VIRTUAL_VOICE_CONFIG):
         return {}
@@ -39,6 +46,25 @@ def load_virtual_voices() -> Dict[str, Any]:
         return voices if isinstance(voices, dict) else {}
     except Exception:
         return {}
+
+def _coerce_virtual_param(virtual_voice: Dict[str, Any], keys: List[str], default: Any, expected_type: type, name: str) -> Any:
+    for key in keys:
+        if key in virtual_voice:
+            value = virtual_voice.get(key)
+            if value is None:
+                return default
+            if expected_type is bool:
+                if isinstance(value, bool):
+                    return value
+                raise HTTPException(status_code=400, detail=f"Virtual voice '{name}' param '{key}' must be a boolean.")
+            if expected_type in (int, float):
+                if isinstance(value, (int, float)):
+                    return expected_type(value)
+                raise HTTPException(status_code=400, detail=f"Virtual voice '{name}' param '{key}' must be a number.")
+            if isinstance(value, expected_type):
+                return value
+            raise HTTPException(status_code=400, detail=f"Virtual voice '{name}' param '{key}' has invalid type.")
+    return default
 
 def cleanup_old_files(directory: str, max_age_hours: int = 24):
     """清理目录中超过指定小时数的文件"""
@@ -90,6 +116,7 @@ async def create_speech(req: SpeechRequest):
     global tts
     if tts is None:
         raise HTTPException(status_code=500, detail="TTS Model is not initialized.")
+    req.input = _sanitize_input_text(req.input)
     if not req.input.strip():
         raise HTTPException(status_code=400, detail="Input text cannot be empty.")
         
@@ -153,6 +180,23 @@ async def create_speech(req: SpeechRequest):
         emo_ref_mapped = None
         emo_weight = float(virtual_voice.get("emo_weight", 0.65))
         emo_random = False
+
+        # Allow virtual voice to override sampling/generation params (fallback to request/defaults)
+        req.do_sample = _coerce_virtual_param(virtual_voice, ["do_sample"], req.do_sample, bool, req.voice)
+        req.top_p = _coerce_virtual_param(virtual_voice, ["top_p"], req.top_p, float, req.voice)
+        req.top_k = _coerce_virtual_param(virtual_voice, ["top_k", "top_K"], req.top_k, int, req.voice)
+        req.temperature = _coerce_virtual_param(virtual_voice, ["temperature"], req.temperature, float, req.voice)
+        req.length_penalty = _coerce_virtual_param(virtual_voice, ["length_penalty"], req.length_penalty, float, req.voice)
+        req.num_beams = _coerce_virtual_param(virtual_voice, ["num_beams"], req.num_beams, int, req.voice)
+        req.repetition_penalty = _coerce_virtual_param(virtual_voice, ["repetition_penalty"], req.repetition_penalty, float, req.voice)
+        req.max_mel_tokens = _coerce_virtual_param(virtual_voice, ["max_mel_tokens"], req.max_mel_tokens, int, req.voice)
+        req.max_text_tokens_per_segment = _coerce_virtual_param(
+            virtual_voice,
+            ["max_text_tokens_per_segment"],
+            req.max_text_tokens_per_segment,
+            int,
+            req.voice,
+        )
     else:
         if req.emo_control_method == 2 and vec:
             if len(vec) != 8:

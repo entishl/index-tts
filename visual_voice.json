@@ -1,5 +1,5 @@
   {
-    "comment": "virtual_voices: key is the exposed voice name. base: reference audio filename in prompts/ or examples/. emo_vector is 8-dim emotion control; order is [喜/Happy, 怒/Angry, 哀/Sad, 惧/Afraid, 厌恶/Disgusted, 低落/Melancholic, 惊喜/Surprised, 平静/Calm]. emo_weight is optional.",
+    "comment": "virtual_voices: key is the exposed voice name. base: reference audio filename in prompts/ or examples/. emo_vector is 8-dim emotion control; order is [喜/Happy, 怒/Angry, 哀/Sad, 惧/Afraid, 厌恶/Disgusted, 低落/Melancholic, 惊喜/Surprised, 平静/Calm]. emo_weight is optional. Optional sampling params: do_sample, top_p, top_k/top_K, temperature, length_penalty, num_beams, repetition_penalty, max_mel_tokens, max_text_tokens_per_segment.",
     "emo_vector_order": [
       {"zh": "喜", "en": "Happy"},
       {"zh": "怒", "en": "Angry"},
@@ -14,7 +14,16 @@
       "yyds": {
         "base": "yuki.wav",
         "emo_vector": [0.5, 0.1, 0.0, 0.0, 0.1, 0.0, 0.1, 0.1],
-        "emo_weight": 0.65
+        "emo_weight": 0.65,
+        "do_sample": true,
+        "top_p": 0.8,
+        "top_k": 30,
+        "temperature": 0.8,
+        "length_penalty": 0.0,
+        "num_beams": 3,
+        "repetition_penalty": 10.0,
+        "max_mel_tokens": 1500,
+        "max_text_tokens_per_segment": 120
       }
     }
   }

@@ -17,37 +17,43 @@ sys.path.append(current_dir)
 sys.path.append(os.path.join(current_dir, "indextts"))
 
 import argparse
-parser = argparse.ArgumentParser(
-    description="IndexTTS WebUI",
-    formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-)
-parser.add_argument("--verbose", action="store_true", default=False, help="Enable verbose mode")
-parser.add_argument("--port", type=int, default=7860, help="Port to run the web UI on")
-parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to run the web UI on")
-parser.add_argument("--model_dir", type=str, default="./checkpoints", help="Model checkpoints directory")
-parser.add_argument("--fp16", action="store_true", default=False, help="Use FP16 for inference if available")
-parser.add_argument("--deepspeed", action="store_true", default=False, help="Use DeepSpeed to accelerate if available")
-parser.add_argument("--cuda_kernel", action="store_true", default=False, help="Use CUDA kernel for inference if available")
-parser.add_argument("--accel", action="store_true", default=False, help="Use Accel engine (Flash Attention 2) if available")
-parser.add_argument("--disable_emo_text", action="store_true", default=False, help="Disable text-based emotion control model (QwenEmotion)")
-parser.add_argument("--gui_seg_tokens", type=int, default=120, help="GUI: Max tokens per generation segment")
-cmd_args = parser.parse_args()
 
-if not os.path.exists(cmd_args.model_dir):
-    print(f"Model directory {cmd_args.model_dir} does not exist. Please download the model first.")
-    sys.exit(1)
+cmd_args = None
+tts = None
 
-for file in [
-    "bpe.model",
-    "gpt.pth",
-    "config.yaml",
-    "s2mel.pth",
-    "wav2vec2bert_stats.pt"
-]:
-    file_path = os.path.join(cmd_args.model_dir, file)
-    if not os.path.exists(file_path):
-        print(f"Required file {file_path} does not exist. Please download it.")
-        sys.exit(1)
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="IndexTTS WebUI",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--verbose", action="store_true", default=False, help="Enable verbose mode")
+    parser.add_argument("--port", type=int, default=7860, help="Port to run the web UI on")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to run the web UI on")
+    parser.add_argument("--model_dir", type=str, default="./checkpoints", help="Model checkpoints directory")
+    parser.add_argument("--fp16", action="store_true", default=False, help="Use FP16 for inference if available")
+    parser.add_argument("--deepspeed", action="store_true", default=False, help="Use DeepSpeed to accelerate if available")
+    parser.add_argument("--cuda_kernel", action="store_true", default=False, help="Use CUDA kernel for inference if available")
+    parser.add_argument("--accel", action="store_true", default=False, help="Use Accel engine (Flash Attention 2) if available")
+    parser.add_argument("--disable_emo_text", action="store_true", default=False, help="Disable text-based emotion control model (QwenEmotion)")
+    parser.add_argument("--gui_seg_tokens", type=int, default=120, help="GUI: Max tokens per generation segment")
+    return parser.parse_args(argv)
+
+def validate_model_dir(model_dir):
+    if not os.path.exists(model_dir):
+        print(f"Model directory {model_dir} does not exist. Please download the model first.")
+        raise SystemExit(1)
+
+    for file in [
+        "bpe.model",
+        "gpt.pth",
+        "config.yaml",
+        "s2mel.pth",
+        "wav2vec2bert_stats.pt"
+    ]:
+        file_path = os.path.join(model_dir, file)
+        if not os.path.exists(file_path):
+            print(f"Required file {file_path} does not exist. Please download it.")
+            raise SystemExit(1)
 
 import gradio as gr
 from indextts.infer_v2 import IndexTTS2
@@ -55,14 +61,18 @@ from tools.i18n.i18n import I18nAuto
 
 i18n = I18nAuto(language="Auto")
 MODE = 'local'
-tts = IndexTTS2(model_dir=cmd_args.model_dir,
-                cfg_path=os.path.join(cmd_args.model_dir, "config.yaml"),
-                use_fp16=cmd_args.fp16,
-                use_deepspeed=cmd_args.deepspeed,
-                use_cuda_kernel=cmd_args.cuda_kernel,
-                use_accel=cmd_args.accel,
-                use_emo_text_model=not cmd_args.disable_emo_text,
-                )
+
+def init_tts(args):
+    global tts
+    tts = IndexTTS2(
+        model_dir=args.model_dir,
+        cfg_path=os.path.join(args.model_dir, "config.yaml"),
+        use_fp16=args.fp16,
+        use_deepspeed=args.deepspeed,
+        use_cuda_kernel=args.cuda_kernel,
+        use_accel=args.accel,
+        use_emo_text_model=not args.disable_emo_text,
+    )
 # 支持的语言列表
 LANGUAGES = {
     "中文": "zh_CN",
@@ -191,371 +201,383 @@ def create_warning_message(warning_text):
 def create_experimental_warning_message():
     return create_warning_message(i18n('提示：此功能为实验版，结果尚不稳定，我们正在持续优化中。'))
 
-with gr.Blocks(title="IndexTTS Demo") as demo:
-    mutex = threading.Lock()
-    gr.HTML('''
-    <h2><center>IndexTTS2: A Breakthrough in Emotionally Expressive and Duration-Controlled Auto-Regressive Zero-Shot Text-to-Speech</h2>
-<p align="center">
-<a href='https://arxiv.org/abs/2506.21619'><img src='https://img.shields.io/badge/ArXiv-2506.21619-red'></a>
-</p>
-    ''')
+def build_demo(args):
+    global cmd_args
+    cmd_args = args
+    if tts is None:
+        init_tts(args)
 
-    with gr.Tab(i18n("音频生成")):
-        with gr.Row():
-            os.makedirs("prompts",exist_ok=True)
-            prompt_audio = gr.Audio(label=i18n("音色参考音频"),key="prompt_audio",
-                                    sources=["upload","microphone"],type="filepath")
-            prompt_list = os.listdir("prompts")
-            default = ''
-            if prompt_list:
-                default = prompt_list[0]
-            with gr.Column():
-                input_text_single = gr.TextArea(label=i18n("文本"),key="input_text_single", placeholder=i18n("请输入目标文本"), info=f"{i18n('当前模型版本')}{tts.model_version or '1.0'}")
-                gen_button = gr.Button(i18n("生成语音"), key="gen_button",interactive=True)
-            output_audio = gr.Audio(label=i18n("生成结果"), visible=True,key="output_audio")
-
-        with gr.Row():
-            experimental_checkbox = gr.Checkbox(label=i18n("显示实验功能"), value=False)
-            glossary_checkbox = gr.Checkbox(label=i18n("开启术语词汇读音"), value=tts.normalizer.enable_glossary)
-        with gr.Accordion(i18n("功能设置")):
-            # 情感控制选项部分
+    with gr.Blocks(title="IndexTTS Demo") as demo:
+        mutex = threading.Lock()
+        gr.HTML('''
+        <h2><center>IndexTTS2: A Breakthrough in Emotionally Expressive and Duration-Controlled Auto-Regressive Zero-Shot Text-to-Speech</h2>
+    <p align="center">
+    <a href='https://arxiv.org/abs/2506.21619'><img src='https://img.shields.io/badge/ArXiv-2506.21619-red'></a>
+    </p>
+        ''')
+    
+        with gr.Tab(i18n("音频生成")):
             with gr.Row():
-                emo_control_method = gr.Radio(
-                    choices=EMO_CHOICES_OFFICIAL,
-                    type="index",
-                    value=EMO_CHOICES_OFFICIAL[0],label=i18n("情感控制方式"))
-                # we MUST have an extra, INVISIBLE list of *all* emotion control
-                # methods so that gr.Dataset() can fetch ALL control mode labels!
-                # otherwise, the gr.Dataset()'s experimental labels would be empty!
-                emo_control_method_all = gr.Radio(
-                    choices=EMO_CHOICES_ALL,
-                    type="index",
-                    value=EMO_CHOICES_ALL[0], label=i18n("情感控制方式"),
-                    visible=False)  # do not render
-        # 情感参考音频部分
-        with gr.Group(visible=False) as emotion_reference_group:
-            with gr.Row():
-                emo_upload = gr.Audio(label=i18n("上传情感参考音频"), type="filepath")
-
-        # 情感随机采样
-        with gr.Row(visible=False) as emotion_randomize_group:
-            emo_random = gr.Checkbox(label=i18n("情感随机采样"), value=False)
-
-        # 情感向量控制部分
-        with gr.Group(visible=False) as emotion_vector_group:
-            with gr.Row():
+                os.makedirs("prompts",exist_ok=True)
+                prompt_audio = gr.Audio(label=i18n("音色参考音频"),key="prompt_audio",
+                                        sources=["upload","microphone"],type="filepath")
+                prompt_list = os.listdir("prompts")
+                default = ''
+                if prompt_list:
+                    default = prompt_list[0]
                 with gr.Column():
-                    vec1 = gr.Slider(label=i18n("喜"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
-                    vec2 = gr.Slider(label=i18n("怒"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
-                    vec3 = gr.Slider(label=i18n("哀"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
-                    vec4 = gr.Slider(label=i18n("惧"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
-                with gr.Column():
-                    vec5 = gr.Slider(label=i18n("厌恶"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
-                    vec6 = gr.Slider(label=i18n("低落"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
-                    vec7 = gr.Slider(label=i18n("惊喜"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
-                    vec8 = gr.Slider(label=i18n("平静"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
-
-        with gr.Group(visible=False) as emo_text_group:
-            create_experimental_warning_message()
+                    input_text_single = gr.TextArea(label=i18n("文本"),key="input_text_single", placeholder=i18n("请输入目标文本"), info=f"{i18n('当前模型版本')}{tts.model_version or '1.0'}")
+                    gen_button = gr.Button(i18n("生成语音"), key="gen_button",interactive=True)
+                output_audio = gr.Audio(label=i18n("生成结果"), visible=True,key="output_audio")
+    
             with gr.Row():
-                emo_text = gr.Textbox(label=i18n("情感描述文本"),
-                                      placeholder=i18n("请输入情绪描述（或留空以自动使用目标文本作为情绪描述）"),
-                                      value="",
-                                      info=i18n("例如：委屈巴巴、危险在悄悄逼近"))
-
-        with gr.Row(visible=False) as emo_weight_group:
-            emo_weight = gr.Slider(label=i18n("情感权重"), minimum=0.0, maximum=1.0, value=0.65, step=0.01)
-
-        # 术语词汇表管理
-        with gr.Accordion(i18n("自定义术语词汇读音"), open=False, visible=tts.normalizer.enable_glossary) as glossary_accordion:
-            gr.Markdown(i18n("自定义个别专业术语的读音"))
-            with gr.Row():
-                with gr.Column(scale=1):
-                    glossary_term = gr.Textbox(
-                        label=i18n("术语"),
-                        placeholder="IndexTTS2",
-                    )
-                    glossary_reading_zh = gr.Textbox(
-                        label=i18n("中文读法"),
-                        placeholder="Index T-T-S 二",
-                    )
-                    glossary_reading_en = gr.Textbox(
-                        label=i18n("英文读法"),
-                        placeholder="Index T-T-S two",
-                    )
-                    btn_add_term = gr.Button(i18n("添加术语"), scale=1)
-                with gr.Column(scale=2):
-                    glossary_table = gr.Markdown(
-                        value=format_glossary_markdown()
-                    )
-
-        with gr.Accordion(i18n("高级生成参数设置"), open=False, visible=True) as advanced_settings_group:
-            with gr.Row():
-                with gr.Column(scale=1):
-                    gr.Markdown(f"**{i18n('GPT2 采样设置')}** _{i18n('参数会影响音频多样性和生成速度详见')} [Generation strategies](https://huggingface.co/docs/transformers/main/en/generation_strategies)._")
-                    with gr.Row():
-                        do_sample = gr.Checkbox(label="do_sample", value=True, info=i18n("是否进行采样"))
-                        temperature = gr.Slider(label="temperature", minimum=0.1, maximum=2.0, value=0.8, step=0.1)
-                    with gr.Row():
-                        top_p = gr.Slider(label="top_p", minimum=0.0, maximum=1.0, value=0.8, step=0.01)
-                        top_k = gr.Slider(label="top_k", minimum=0, maximum=100, value=30, step=1)
-                        num_beams = gr.Slider(label="num_beams", value=3, minimum=1, maximum=10, step=1)
-                    with gr.Row():
-                        repetition_penalty = gr.Number(label="repetition_penalty", precision=None, value=10.0, minimum=0.1, maximum=20.0, step=0.1)
-                        length_penalty = gr.Number(label="length_penalty", precision=None, value=0.0, minimum=-2.0, maximum=2.0, step=0.1)
-                    max_mel_tokens = gr.Slider(label="max_mel_tokens", value=1500, minimum=50, maximum=tts.cfg.gpt.max_mel_tokens, step=10, info=i18n("生成Token最大数量，过小导致音频被截断"), key="max_mel_tokens")
-                    # with gr.Row():
-                    #     typical_sampling = gr.Checkbox(label="typical_sampling", value=False, info="不建议使用")
-                    #     typical_mass = gr.Slider(label="typical_mass", value=0.9, minimum=0.0, maximum=1.0, step=0.1)
-                with gr.Column(scale=2):
-                    gr.Markdown(f'**{i18n("分句设置")}** _{i18n("参数会影响音频质量和生成速度")}_')
-                    with gr.Row():
-                        initial_value = max(20, min(tts.cfg.gpt.max_text_tokens, cmd_args.gui_seg_tokens))
-                        max_text_tokens_per_segment = gr.Slider(
-                            label=i18n("分句最大Token数"), value=initial_value, minimum=20, maximum=tts.cfg.gpt.max_text_tokens, step=2, key="max_text_tokens_per_segment",
-                            info=i18n("建议80~200之间，值越大，分句越长；值越小，分句越碎；过小过大都可能导致音频质量不高"),
+                experimental_checkbox = gr.Checkbox(label=i18n("显示实验功能"), value=False)
+                glossary_checkbox = gr.Checkbox(label=i18n("开启术语词汇读音"), value=tts.normalizer.enable_glossary)
+            with gr.Accordion(i18n("功能设置")):
+                # 情感控制选项部分
+                with gr.Row():
+                    emo_control_method = gr.Radio(
+                        choices=EMO_CHOICES_OFFICIAL,
+                        type="index",
+                        value=EMO_CHOICES_OFFICIAL[0],label=i18n("情感控制方式"))
+                    # we MUST have an extra, INVISIBLE list of *all* emotion control
+                    # methods so that gr.Dataset() can fetch ALL control mode labels!
+                    # otherwise, the gr.Dataset()'s experimental labels would be empty!
+                    emo_control_method_all = gr.Radio(
+                        choices=EMO_CHOICES_ALL,
+                        type="index",
+                        value=EMO_CHOICES_ALL[0], label=i18n("情感控制方式"),
+                        visible=False)  # do not render
+            # 情感参考音频部分
+            with gr.Group(visible=False) as emotion_reference_group:
+                with gr.Row():
+                    emo_upload = gr.Audio(label=i18n("上传情感参考音频"), type="filepath")
+    
+            # 情感随机采样
+            with gr.Row(visible=False) as emotion_randomize_group:
+                emo_random = gr.Checkbox(label=i18n("情感随机采样"), value=False)
+    
+            # 情感向量控制部分
+            with gr.Group(visible=False) as emotion_vector_group:
+                with gr.Row():
+                    with gr.Column():
+                        vec1 = gr.Slider(label=i18n("喜"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
+                        vec2 = gr.Slider(label=i18n("怒"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
+                        vec3 = gr.Slider(label=i18n("哀"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
+                        vec4 = gr.Slider(label=i18n("惧"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
+                    with gr.Column():
+                        vec5 = gr.Slider(label=i18n("厌恶"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
+                        vec6 = gr.Slider(label=i18n("低落"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
+                        vec7 = gr.Slider(label=i18n("惊喜"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
+                        vec8 = gr.Slider(label=i18n("平静"), minimum=0.0, maximum=1.0, value=0.0, step=0.05)
+    
+            with gr.Group(visible=False) as emo_text_group:
+                create_experimental_warning_message()
+                with gr.Row():
+                    emo_text = gr.Textbox(label=i18n("情感描述文本"),
+                                          placeholder=i18n("请输入情绪描述（或留空以自动使用目标文本作为情绪描述）"),
+                                          value="",
+                                          info=i18n("例如：委屈巴巴、危险在悄悄逼近"))
+    
+            with gr.Row(visible=False) as emo_weight_group:
+                emo_weight = gr.Slider(label=i18n("情感权重"), minimum=0.0, maximum=1.0, value=0.65, step=0.01)
+    
+            # 术语词汇表管理
+            with gr.Accordion(i18n("自定义术语词汇读音"), open=False, visible=tts.normalizer.enable_glossary) as glossary_accordion:
+                gr.Markdown(i18n("自定义个别专业术语的读音"))
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        glossary_term = gr.Textbox(
+                            label=i18n("术语"),
+                            placeholder="IndexTTS2",
                         )
-                    with gr.Accordion(i18n("预览分句结果"), open=True) as segments_settings:
-                        segments_preview = gr.Dataframe(
-                            headers=[i18n("序号"), i18n("分句内容"), i18n("Token数")],
-                            key="segments_preview",
-                            wrap=True,
+                        glossary_reading_zh = gr.Textbox(
+                            label=i18n("中文读法"),
+                            placeholder="Index T-T-S 二",
                         )
-            advanced_params = [
-                do_sample, top_p, top_k, temperature,
-                length_penalty, num_beams, repetition_penalty, max_mel_tokens,
-                # typical_sampling, typical_mass,
-            ]
-
-        # we must use `gr.Dataset` to support dynamic UI rewrites, since `gr.Examples`
-        # binds tightly to UI and always restores the initial state of all components,
-        # such as the list of available choices in emo_control_method.
-        example_table = gr.Dataset(label="Examples",
-            samples_per_page=20,
-            samples=get_example_cases(include_experimental=False),
-            type="values",
-            # these components are NOT "connected". it just reads the column labels/available
-            # states from them, so we MUST link to the "all options" versions of all components,
-            # such as `emo_control_method_all` (to be able to see EXPERIMENTAL text labels)!
-            components=[prompt_audio,
-                        emo_control_method_all,  # important: support all mode labels!
-                        input_text_single,
-                        emo_upload,
-                        emo_weight,
-                        emo_text,
-                        vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8]
+                        glossary_reading_en = gr.Textbox(
+                            label=i18n("英文读法"),
+                            placeholder="Index T-T-S two",
+                        )
+                        btn_add_term = gr.Button(i18n("添加术语"), scale=1)
+                    with gr.Column(scale=2):
+                        glossary_table = gr.Markdown(
+                            value=format_glossary_markdown()
+                        )
+    
+            with gr.Accordion(i18n("高级生成参数设置"), open=False, visible=True) as advanced_settings_group:
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown(f"**{i18n('GPT2 采样设置')}** _{i18n('参数会影响音频多样性和生成速度详见')} [Generation strategies](https://huggingface.co/docs/transformers/main/en/generation_strategies)._")
+                        with gr.Row():
+                            do_sample = gr.Checkbox(label="do_sample", value=True, info=i18n("是否进行采样"))
+                            temperature = gr.Slider(label="temperature", minimum=0.1, maximum=2.0, value=0.8, step=0.1)
+                        with gr.Row():
+                            top_p = gr.Slider(label="top_p", minimum=0.0, maximum=1.0, value=0.8, step=0.01)
+                            top_k = gr.Slider(label="top_k", minimum=0, maximum=100, value=30, step=1)
+                            num_beams = gr.Slider(label="num_beams", value=3, minimum=1, maximum=10, step=1)
+                        with gr.Row():
+                            repetition_penalty = gr.Number(label="repetition_penalty", precision=None, value=10.0, minimum=0.1, maximum=20.0, step=0.1)
+                            length_penalty = gr.Number(label="length_penalty", precision=None, value=0.0, minimum=-2.0, maximum=2.0, step=0.1)
+                        max_mel_tokens = gr.Slider(label="max_mel_tokens", value=1500, minimum=50, maximum=tts.cfg.gpt.max_mel_tokens, step=10, info=i18n("生成Token最大数量，过小导致音频被截断"), key="max_mel_tokens")
+                        # with gr.Row():
+                        #     typical_sampling = gr.Checkbox(label="typical_sampling", value=False, info="不建议使用")
+                        #     typical_mass = gr.Slider(label="typical_mass", value=0.9, minimum=0.0, maximum=1.0, step=0.1)
+                    with gr.Column(scale=2):
+                        gr.Markdown(f'**{i18n("分句设置")}** _{i18n("参数会影响音频质量和生成速度")}_')
+                        with gr.Row():
+                            initial_value = max(20, min(tts.cfg.gpt.max_text_tokens, cmd_args.gui_seg_tokens))
+                            max_text_tokens_per_segment = gr.Slider(
+                                label=i18n("分句最大Token数"), value=initial_value, minimum=20, maximum=tts.cfg.gpt.max_text_tokens, step=2, key="max_text_tokens_per_segment",
+                                info=i18n("建议80~200之间，值越大，分句越长；值越小，分句越碎；过小过大都可能导致音频质量不高"),
+                            )
+                        with gr.Accordion(i18n("预览分句结果"), open=True) as segments_settings:
+                            segments_preview = gr.Dataframe(
+                                headers=[i18n("序号"), i18n("分句内容"), i18n("Token数")],
+                                key="segments_preview",
+                                wrap=True,
+                            )
+                advanced_params = [
+                    do_sample, top_p, top_k, temperature,
+                    length_penalty, num_beams, repetition_penalty, max_mel_tokens,
+                    # typical_sampling, typical_mass,
+                ]
+    
+            # we must use `gr.Dataset` to support dynamic UI rewrites, since `gr.Examples`
+            # binds tightly to UI and always restores the initial state of all components,
+            # such as the list of available choices in emo_control_method.
+            example_table = gr.Dataset(label="Examples",
+                samples_per_page=20,
+                samples=get_example_cases(include_experimental=False),
+                type="values",
+                # these components are NOT "connected". it just reads the column labels/available
+                # states from them, so we MUST link to the "all options" versions of all components,
+                # such as `emo_control_method_all` (to be able to see EXPERIMENTAL text labels)!
+                components=[prompt_audio,
+                            emo_control_method_all,  # important: support all mode labels!
+                            input_text_single,
+                            emo_upload,
+                            emo_weight,
+                            emo_text,
+                            vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8]
+            )
+    
+        def on_example_click(example):
+            print(f"Example clicked: ({len(example)} values) = {example!r}")
+            return (
+                gr.update(value=example[0]),
+                gr.update(value=example[1]),
+                gr.update(value=example[2]),
+                gr.update(value=example[3]),
+                gr.update(value=example[4]),
+                gr.update(value=example[5]),
+                gr.update(value=example[6]),
+                gr.update(value=example[7]),
+                gr.update(value=example[8]),
+                gr.update(value=example[9]),
+                gr.update(value=example[10]),
+                gr.update(value=example[11]),
+                gr.update(value=example[12]),
+                gr.update(value=example[13]),
+            )
+    
+        # click() event works on both desktop and mobile UI
+        example_table.click(on_example_click,
+                            inputs=[example_table],
+                            outputs=[prompt_audio,
+                                     emo_control_method,
+                                     input_text_single,
+                                     emo_upload,
+                                     emo_weight,
+                                     emo_text,
+                                     vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8]
         )
-
-    def on_example_click(example):
-        print(f"Example clicked: ({len(example)} values) = {example!r}")
-        return (
-            gr.update(value=example[0]),
-            gr.update(value=example[1]),
-            gr.update(value=example[2]),
-            gr.update(value=example[3]),
-            gr.update(value=example[4]),
-            gr.update(value=example[5]),
-            gr.update(value=example[6]),
-            gr.update(value=example[7]),
-            gr.update(value=example[8]),
-            gr.update(value=example[9]),
-            gr.update(value=example[10]),
-            gr.update(value=example[11]),
-            gr.update(value=example[12]),
-            gr.update(value=example[13]),
+    
+        def on_input_text_change(text, max_text_tokens_per_segment):
+            if text and len(text) > 0:
+                text_tokens_list = tts.tokenizer.tokenize(text)
+    
+                segments = tts.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment=int(max_text_tokens_per_segment))
+                data = []
+                for i, s in enumerate(segments):
+                    segment_str = ''.join(s)
+                    tokens_count = len(s)
+                    data.append([i, segment_str, tokens_count])
+                return {
+                    segments_preview: gr.update(value=data, visible=True, type="array"),
+                }
+            else:
+                df = pd.DataFrame([], columns=[i18n("序号"), i18n("分句内容"), i18n("Token数")])
+                return {
+                    segments_preview: gr.update(value=df),
+                }
+    
+        # 术语词汇表事件处理函数
+        def on_add_glossary_term(term, reading_zh, reading_en):
+            """添加术语到词汇表并自动保存"""
+            term = term.rstrip()
+            reading_zh = reading_zh.rstrip()
+            reading_en = reading_en.rstrip()
+    
+            if not term:
+                gr.Warning(i18n("请输入术语"))
+                return gr.update()
+    
+            if not reading_zh and not reading_en:
+                gr.Warning(i18n("请至少输入一种读法"))
+                return gr.update()
+    
+    
+            # 构建读法数据
+            if reading_zh and reading_en:
+                reading = {"zh": reading_zh, "en": reading_en}
+            elif reading_zh:
+                reading = {"zh": reading_zh}
+            elif reading_en:
+                reading = {"en": reading_en}
+            else:
+                reading = reading_zh or reading_en
+    
+            # 添加到词汇表
+            tts.normalizer.term_glossary[term] = reading
+    
+            # 自动保存到文件
+            try:
+                tts.normalizer.save_glossary_to_yaml(tts.glossary_path)
+                gr.Info(i18n("词汇表已更新"), duration=1)
+            except Exception as e:
+                gr.Error(i18n("保存词汇表时出错"))
+                print(f"Error details: {e}")
+                return gr.update()
+    
+            # 更新Markdown表格
+            return gr.update(value=format_glossary_markdown())
+    
+    
+        def on_method_change(emo_control_method):
+            if emo_control_method == 1:  # emotion reference audio
+                return (gr.update(visible=True),
+                        gr.update(visible=False),
+                        gr.update(visible=False),
+                        gr.update(visible=False),
+                        gr.update(visible=True)
+                        )
+            elif emo_control_method == 2:  # emotion vectors
+                return (gr.update(visible=False),
+                        gr.update(visible=True),
+                        gr.update(visible=True),
+                        gr.update(visible=False),
+                        gr.update(visible=True)
+                        )
+            elif emo_control_method == 3:  # emotion text description
+                return (gr.update(visible=False),
+                        gr.update(visible=True),
+                        gr.update(visible=False),
+                        gr.update(visible=True),
+                        gr.update(visible=True)
+                        )
+            else:  # 0: same as speaker voice
+                return (gr.update(visible=False),
+                        gr.update(visible=False),
+                        gr.update(visible=False),
+                        gr.update(visible=False),
+                        gr.update(visible=False)
+                        )
+    
+        emo_control_method.change(on_method_change,
+            inputs=[emo_control_method],
+            outputs=[emotion_reference_group,
+                     emotion_randomize_group,
+                     emotion_vector_group,
+                     emo_text_group,
+                     emo_weight_group]
         )
-
-    # click() event works on both desktop and mobile UI
-    example_table.click(on_example_click,
-                        inputs=[example_table],
-                        outputs=[prompt_audio,
-                                 emo_control_method,
-                                 input_text_single,
-                                 emo_upload,
-                                 emo_weight,
-                                 emo_text,
-                                 vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8]
-    )
-
-    def on_input_text_change(text, max_text_tokens_per_segment):
-        if text and len(text) > 0:
-            text_tokens_list = tts.tokenizer.tokenize(text)
-
-            segments = tts.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment=int(max_text_tokens_per_segment))
-            data = []
-            for i, s in enumerate(segments):
-                segment_str = ''.join(s)
-                tokens_count = len(s)
-                data.append([i, segment_str, tokens_count])
-            return {
-                segments_preview: gr.update(value=data, visible=True, type="array"),
-            }
-        else:
-            df = pd.DataFrame([], columns=[i18n("序号"), i18n("分句内容"), i18n("Token数")])
-            return {
-                segments_preview: gr.update(value=df),
-            }
-
-    # 术语词汇表事件处理函数
-    def on_add_glossary_term(term, reading_zh, reading_en):
-        """添加术语到词汇表并自动保存"""
-        term = term.rstrip()
-        reading_zh = reading_zh.rstrip()
-        reading_en = reading_en.rstrip()
-
-        if not term:
-            gr.Warning(i18n("请输入术语"))
-            return gr.update()
-            
-        if not reading_zh and not reading_en:
-            gr.Warning(i18n("请至少输入一种读法"))
-            return gr.update()
-        
-
-        # 构建读法数据
-        if reading_zh and reading_en:
-            reading = {"zh": reading_zh, "en": reading_en}
-        elif reading_zh:
-            reading = {"zh": reading_zh}
-        elif reading_en:
-            reading = {"en": reading_en}
-        else:
-            reading = reading_zh or reading_en
-
-        # 添加到词汇表
-        tts.normalizer.term_glossary[term] = reading
-
-        # 自动保存到文件
-        try:
-            tts.normalizer.save_glossary_to_yaml(tts.glossary_path)
-            gr.Info(i18n("词汇表已更新"), duration=1)
-        except Exception as e:
-            gr.Error(i18n("保存词汇表时出错"))
-            print(f"Error details: {e}")
-            return gr.update()
-
-        # 更新Markdown表格
-        return gr.update(value=format_glossary_markdown())
-        
-
-    def on_method_change(emo_control_method):
-        if emo_control_method == 1:  # emotion reference audio
-            return (gr.update(visible=True),
-                    gr.update(visible=False),
-                    gr.update(visible=False),
-                    gr.update(visible=False),
-                    gr.update(visible=True)
-                    )
-        elif emo_control_method == 2:  # emotion vectors
-            return (gr.update(visible=False),
-                    gr.update(visible=True),
-                    gr.update(visible=True),
-                    gr.update(visible=False),
-                    gr.update(visible=True)
-                    )
-        elif emo_control_method == 3:  # emotion text description
-            return (gr.update(visible=False),
-                    gr.update(visible=True),
-                    gr.update(visible=False),
-                    gr.update(visible=True),
-                    gr.update(visible=True)
-                    )
-        else:  # 0: same as speaker voice
-            return (gr.update(visible=False),
-                    gr.update(visible=False),
-                    gr.update(visible=False),
-                    gr.update(visible=False),
-                    gr.update(visible=False)
-                    )
-
-    emo_control_method.change(on_method_change,
-        inputs=[emo_control_method],
-        outputs=[emotion_reference_group,
-                 emotion_randomize_group,
-                 emotion_vector_group,
-                 emo_text_group,
-                 emo_weight_group]
-    )
-
-    def on_experimental_change(is_experimental, current_mode_index):
-        # 切换情感控制选项
-        new_choices = EMO_CHOICES_ALL if is_experimental else EMO_CHOICES_OFFICIAL
-        # if their current mode selection doesn't exist in new choices, reset to 0.
-        # we don't verify that OLD index means the same in NEW list, since we KNOW it does.
-        new_index = current_mode_index if current_mode_index < len(new_choices) else 0
-
-        return (
-            gr.update(choices=new_choices, value=new_choices[new_index]),
-            gr.update(samples=get_example_cases(include_experimental=is_experimental)),
+    
+        def on_experimental_change(is_experimental, current_mode_index):
+            # 切换情感控制选项
+            new_choices = EMO_CHOICES_ALL if is_experimental else EMO_CHOICES_OFFICIAL
+            # if their current mode selection doesn't exist in new choices, reset to 0.
+            # we don't verify that OLD index means the same in NEW list, since we KNOW it does.
+            new_index = current_mode_index if current_mode_index < len(new_choices) else 0
+    
+            return (
+                gr.update(choices=new_choices, value=new_choices[new_index]),
+                gr.update(samples=get_example_cases(include_experimental=is_experimental)),
+            )
+    
+        experimental_checkbox.change(
+            on_experimental_change,
+            inputs=[experimental_checkbox, emo_control_method],
+            outputs=[emo_control_method, example_table]
         )
-
-    experimental_checkbox.change(
-        on_experimental_change,
-        inputs=[experimental_checkbox, emo_control_method],
-        outputs=[emo_control_method, example_table]
-    )
-
-    def on_glossary_checkbox_change(is_enabled):
-        """控制术语词汇表的可见性"""
-        tts.normalizer.enable_glossary = is_enabled
-        return gr.update(visible=is_enabled)
-
-    glossary_checkbox.change(
-        on_glossary_checkbox_change,
-        inputs=[glossary_checkbox],
-        outputs=[glossary_accordion]
-    )
-
-    input_text_single.change(
-        on_input_text_change,
-        inputs=[input_text_single, max_text_tokens_per_segment],
-        outputs=[segments_preview]
-    )
-
-    max_text_tokens_per_segment.change(
-        on_input_text_change,
-        inputs=[input_text_single, max_text_tokens_per_segment],
-        outputs=[segments_preview]
-    )
-
-    prompt_audio.upload(update_prompt_audio,
-                         inputs=[],
-                         outputs=[gen_button])
-
-    def on_demo_load():
-        """页面加载时重新加载glossary数据"""
-        try:
-            tts.normalizer.load_glossary_from_yaml(tts.glossary_path)
-        except Exception as e:
-            gr.Error(i18n("加载词汇表时出错"))
-            print(f"Failed to reload glossary on page load: {e}")
-        return gr.update(value=format_glossary_markdown())
-
-    # 术语词汇表事件绑定
-    btn_add_term.click(
-        on_add_glossary_term,
-        inputs=[glossary_term, glossary_reading_zh, glossary_reading_en],
-        outputs=[glossary_table]
-    )
-
-    # 页面加载时重新加载glossary
-    demo.load(
-        on_demo_load,
-        inputs=[],
-        outputs=[glossary_table]
-    )
-
-    gen_button.click(gen_single,
-                     inputs=[emo_control_method,prompt_audio, input_text_single, emo_upload, emo_weight,
-                            vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8,
-                             emo_text,emo_random,
-                             max_text_tokens_per_segment,
-                             *advanced_params,
-                     ],
-                     outputs=[output_audio])
-
-
+    
+        def on_glossary_checkbox_change(is_enabled):
+            """控制术语词汇表的可见性"""
+            tts.normalizer.enable_glossary = is_enabled
+            return gr.update(visible=is_enabled)
+    
+        glossary_checkbox.change(
+            on_glossary_checkbox_change,
+            inputs=[glossary_checkbox],
+            outputs=[glossary_accordion]
+        )
+    
+        input_text_single.change(
+            on_input_text_change,
+            inputs=[input_text_single, max_text_tokens_per_segment],
+            outputs=[segments_preview]
+        )
+    
+        max_text_tokens_per_segment.change(
+            on_input_text_change,
+            inputs=[input_text_single, max_text_tokens_per_segment],
+            outputs=[segments_preview]
+        )
+    
+        prompt_audio.upload(update_prompt_audio,
+                             inputs=[],
+                             outputs=[gen_button])
+    
+        def on_demo_load():
+            """页面加载时重新加载glossary数据"""
+            try:
+                tts.normalizer.load_glossary_from_yaml(tts.glossary_path)
+            except Exception as e:
+                gr.Error(i18n("加载词汇表时出错"))
+                print(f"Failed to reload glossary on page load: {e}")
+            return gr.update(value=format_glossary_markdown())
+    
+        # 术语词汇表事件绑定
+        btn_add_term.click(
+            on_add_glossary_term,
+            inputs=[glossary_term, glossary_reading_zh, glossary_reading_en],
+            outputs=[glossary_table]
+        )
+    
+        # 页面加载时重新加载glossary
+        demo.load(
+            on_demo_load,
+            inputs=[],
+            outputs=[glossary_table]
+        )
+    
+        gen_button.click(gen_single,
+                         inputs=[emo_control_method,prompt_audio, input_text_single, emo_upload, emo_weight,
+                                vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8,
+                                 emo_text,emo_random,
+                                 max_text_tokens_per_segment,
+                                 *advanced_params,
+                         ],
+                         outputs=[output_audio])
+    
+    
+    
+    return demo
 
 if __name__ == "__main__":
+    cmd_args = parse_args()
+    validate_model_dir(cmd_args.model_dir)
+    init_tts(cmd_args)
+    demo = build_demo(cmd_args)
     demo.queue(20)
     demo.launch(server_name=cmd_args.host, server_port=cmd_args.port)
